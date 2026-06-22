@@ -1,15 +1,22 @@
+import csv
 import hashlib
 import html
 import io
 import re
 from datetime import datetime
 from pathlib import Path
-from textwrap import dedent
 from typing import Dict, List, Optional, Tuple
 
 import streamlit as st
-from PIL import Image, ImageOps, UnidentifiedImageError
+from PIL import Image, ImageDraw, ImageOps, UnidentifiedImageError
 
+# Optional HEIC support. The app still works if pillow-heif is not installed.
+try:
+    from pillow_heif import register_heif_opener
+    register_heif_opener()
+    HEIC_SUPPORTED = True
+except Exception:
+    HEIC_SUPPORTED = False
 
 # ============================================================
 # 1. APP CONFIGURATION
@@ -33,12 +40,6 @@ WEDDING_DATE = "Saturday, September 26, 2026"
 VENUE_NAME = "Fo Guang Shan Temple Main Shrine"
 VENUE_SHORT = "Fo Guang Shan Temple, Toronto"
 
-OUR_STORY_PARAGRAPHS: List[str] = [
-    "Write your first paragraph here. For example, you can share how you met, what brought you closer, or what you appreciate most about each other.",
-    "Write your second paragraph here. You can describe a meaningful memory, your journey as a couple, or why this wedding day is special to both of you.",
-    "Write your third paragraph here. You can close with gratitude to your family and friends for witnessing this important moment.",
-]
-
 TIMELINE: List[Tuple[str, str, str]] = [
     ("16:00", "Gatherings", "Guests arrive, settle in, and prepare for the ceremony."),
     ("16:30", "Praying Services & Transfer of Merits", "A one-hour Buddhist prayer service and transfer of merits."),
@@ -46,7 +47,6 @@ TIMELINE: List[Tuple[str, str, str]] = [
     ("18:00", "Vegetarian Banquet", "A vegetarian banquet to celebrate together."),
 ]
 
-# No ivory/white for guests, so the bride's white dress remains visually distinct.
 LADIES_COLORS: List[Tuple[str, str]] = [
     ("Sand Beige", "#D9C7AE"),
     ("Warm Taupe", "#A69B8E"),
@@ -69,508 +69,451 @@ GROOM_REFERENCE: List[Tuple[str, str]] = [
 ]
 
 SUPPORTED_IMAGE_EXTENSIONS = {
-    ".jpg",
-    ".jpeg",
-    ".png",
-    ".webp",
-    ".bmp",
-    ".tif",
-    ".tiff",
+    ".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff", ".heic", ".heif"
 }
 
-# The app will scan these locations so photos uploaded to root/assets can still appear.
-# Best practice: keep all couple album photos inside assets/album/.
+# If you want the app to display only photos from assets/album, change this to [ALBUM_DIR].
 ALBUM_SEARCH_LOCATIONS = [ALBUM_DIR, ASSETS_DIR, BASE_DIR]
 
-SHEETS_SCOPE = ["https://www.googleapis.com/auth/spreadsheets"]
-
-
 # ============================================================
-# 2. CSS: RESPONSIVE WEB + MOBILE DESIGN
+# 2. CSS: MOBILE + DESKTOP
 # ============================================================
 
 st.markdown(
-    dedent(
-        """
-        <style>
-            #MainMenu {visibility: hidden;}
-            footer {visibility: hidden;}
-            header {visibility: hidden;}
+    """
+<style>
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
 
-            :root {
-                --bg: #fbf7ef;
-                --card: rgba(255, 252, 246, 0.94);
-                --line: rgba(181, 138, 69, 0.24);
-                --gold: #b58a45;
-                --text: #2a241e;
-                --muted: #6a5948;
-                --soft: #f2eadc;
-            }
+    :root {
+        --bg: #fbf7ef;
+        --card: rgba(255, 252, 246, 0.94);
+        --line: rgba(181, 138, 69, 0.24);
+        --gold: #b58a45;
+        --text: #2a241e;
+        --muted: #655545;
+        --soft: #f4eadb;
+    }
 
-            html, body, [class*="css"] {
-                scroll-behavior: smooth;
-                background: var(--bg) !important;
-            }
+    html, body, .stApp {
+        background: var(--bg) !important;
+        color: var(--text) !important;
+        scroll-behavior: smooth;
+    }
 
-            .stApp {
-                background:
-                    radial-gradient(circle at 12% 0%, rgba(235,199,199,0.22), transparent 27%),
-                    radial-gradient(circle at 88% 0%, rgba(217,199,174,0.28), transparent 30%),
-                    linear-gradient(180deg, #fbf7ef 0%, #f6eddf 100%) !important;
-                color: var(--text) !important;
-            }
+    .stApp {
+        background:
+            radial-gradient(circle at 12% 0%, rgba(235,199,199,0.25), transparent 26%),
+            radial-gradient(circle at 88% 0%, rgba(217,199,174,0.30), transparent 28%),
+            linear-gradient(180deg, #fbf7ef 0%, #f6eddf 100%) !important;
+    }
 
-            .block-container {
-                max-width: 1040px;
-                padding-top: 1.1rem;
-                padding-bottom: 4rem;
-            }
+    .block-container {
+        max-width: 1080px;
+        padding-top: 1.2rem;
+        padding-bottom: 4rem;
+    }
 
-            /* Force important text to stay black on mobile browsers/dark mode. */
-            .hero-name,
-            .hero-amp,
-            .section-heading,
-            .subsection-heading,
-            .story-text,
-            .center-copy,
-            .timeline-title,
-            .timeline-time,
-            .color-name,
-            .color-code,
-            .footer-text {
-                color: var(--text) !important;
-            }
+    /* Force mobile Chrome/dark mode to keep text black. */
+    h1, h2, h3, h4, h5, h6,
+    p, span, div,
+    .hero-name, .hero-amp,
+    .section-heading, .subsection-heading,
+    .center-text, .timeline-time, .timeline-title, .timeline-text,
+    .swatch-name, .swatch-code, .story-text {
+        color: var(--text) !important;
+    }
 
-            .hero-card {
-                background: var(--card);
-                border: 1px solid var(--line);
-                border-radius: 30px;
-                box-shadow: 0 18px 45px rgba(60, 42, 20, 0.08);
-                padding: 42px 28px 32px;
-                text-align: center;
-                position: relative;
-                overflow: hidden;
-                margin: 8px auto 28px;
-            }
+    .center-text {
+        text-align: center !important;
+        color: var(--muted) !important;
+        max-width: 800px;
+        margin: 0.35rem auto 1.2rem auto;
+        line-height: 1.75;
+        font-size: 1.02rem;
+    }
 
-            .hero-card::before,
-            .hero-card::after {
-                content: "✦";
-                position: absolute;
-                color: rgba(181, 138, 69, 0.26);
-                font-size: 4.0rem;
-                line-height: 1;
-            }
+    .section-heading {
+        text-align: center !important;
+        font-family: Georgia, 'Times New Roman', serif;
+        font-size: clamp(1.8rem, 5vw, 2.65rem);
+        font-weight: 700;
+        line-height: 1.2;
+        letter-spacing: 0.02em;
+        margin: 0.2rem auto 1rem auto;
+    }
 
-            .hero-card::before { left: 22px; bottom: 18px; }
-            .hero-card::after { right: 22px; top: 18px; }
+    .section-heading:before,
+    .section-heading:after,
+    .subsection-heading:before,
+    .subsection-heading:after {
+        content: "—";
+        color: var(--gold) !important;
+        margin: 0 0.45em;
+        opacity: 0.9;
+    }
 
-            .small-label {
-                letter-spacing: 0.22em;
-                text-transform: uppercase;
-                color: #8d6d3f !important;
-                font-size: 0.78rem;
-                margin-bottom: 14px;
-                font-weight: 650;
-            }
+    .subsection-heading {
+        text-align: center !important;
+        font-family: Georgia, 'Times New Roman', serif;
+        font-size: clamp(1.35rem, 4vw, 2.0rem);
+        font-weight: 700;
+        margin: 1.8rem auto 1rem auto;
+    }
 
-            .hero-name {
-                font-family: Georgia, 'Times New Roman', serif;
-                font-size: clamp(2.05rem, 7vw, 4.2rem);
-                line-height: 1.08;
-                letter-spacing: 0.01em;
-                margin: 0;
-                font-weight: 650;
-            }
+    .hero-card {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 30px;
+        box-shadow: 0 18px 45px rgba(60, 42, 20, 0.08);
+        padding: 44px 28px 34px;
+        text-align: center !important;
+        max-width: 900px;
+        margin: 0.5rem auto 1.8rem auto;
+        position: relative;
+        overflow: hidden;
+    }
 
-            .hero-amp {
-                color: var(--gold) !important;
-                font-family: Georgia, 'Times New Roman', serif;
-                font-size: clamp(1.75rem, 5vw, 3.2rem);
-                font-style: italic;
-                margin: 8px 0;
-            }
+    .hero-card:before,
+    .hero-card:after {
+        content: "✦";
+        position: absolute;
+        color: rgba(181, 138, 69, 0.30) !important;
+        font-size: 4rem;
+        line-height: 1;
+    }
 
-            .gold-line {
-                width: 74px;
-                height: 1px;
-                background: var(--gold);
-                margin: 22px auto;
-            }
+    .hero-card:before { left: 24px; bottom: 18px; }
+    .hero-card:after { right: 24px; top: 18px; }
 
-            .center-copy {
-                color: #5a4a38 !important;
-                font-size: 1.02rem;
-                line-height: 1.7;
-                max-width: 760px;
-                margin: 0 auto 20px auto;
-                text-align: center;
-            }
+    .small-label {
+        letter-spacing: 0.22em;
+        text-transform: uppercase;
+        color: #8d6d3f !important;
+        font-size: 0.78rem;
+        margin-bottom: 14px;
+        font-weight: 700;
+        text-align: center !important;
+    }
 
-            .hero-detail-grid {
-                display: grid;
-                grid-template-columns: 1fr 1fr;
-                gap: 14px;
-                max-width: 680px;
-                margin: 24px auto 0;
-            }
+    .hero-name {
+        font-family: Georgia, 'Times New Roman', serif;
+        font-size: clamp(2.05rem, 7vw, 4.25rem);
+        font-weight: 700;
+        line-height: 1.1;
+        text-align: center !important;
+        margin: 0;
+    }
 
-            .hero-detail {
-                background: rgba(255, 255, 255, 0.62);
-                border: 1px solid rgba(181, 138, 69, 0.18);
-                border-radius: 18px;
-                padding: 16px 18px;
-                color: #4e4032 !important;
-                line-height: 1.5;
-                font-size: 0.96rem;
-            }
+    .hero-amp {
+        color: var(--gold) !important;
+        font-style: italic;
+        display: inline-block;
+        margin: 8px 0;
+    }
 
-            div[data-testid="stVerticalBlockBorderWrapper"] {
-                background: var(--card);
-                border: 1px solid var(--line);
-                border-radius: 28px;
-                box-shadow: 0 14px 35px rgba(60, 42, 20, 0.07);
-                padding: 0.85rem;
-            }
+    .gold-line {
+        width: 74px;
+        height: 1px;
+        background: var(--gold);
+        margin: 22px auto;
+    }
 
-            .section-heading {
-                text-align: center;
-                font-family: Georgia, 'Times New Roman', serif;
-                font-size: clamp(1.55rem, 4.8vw, 2.15rem);
-                letter-spacing: 0.035em;
-                margin: 0.3rem auto 0.9rem auto;
-                font-weight: 650;
-            }
+    .hero-detail-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 14px;
+        max-width: 720px;
+        margin: 24px auto 0;
+    }
 
-            .section-heading::before,
-            .section-heading::after,
-            .subsection-heading::before,
-            .subsection-heading::after {
-                content: "—";
-                color: var(--gold) !important;
-                margin: 0 11px;
-                opacity: 0.85;
-            }
+    .hero-detail {
+        background: rgba(255, 255, 255, 0.62);
+        border: 1px solid rgba(181, 138, 69, 0.18);
+        border-radius: 18px;
+        padding: 16px 18px;
+        text-align: center !important;
+        line-height: 1.5;
+        font-size: 0.96rem;
+    }
 
-            .subsection-heading {
-                text-align: center;
-                font-family: Georgia, 'Times New Roman', serif;
-                font-size: clamp(1.20rem, 3.8vw, 1.55rem);
-                letter-spacing: 0.035em;
-                margin: 1.4rem auto 0.85rem auto;
-                font-weight: 650;
-            }
+    div[data-testid="stVerticalBlockBorderWrapper"] {
+        border-color: var(--line) !important;
+        background: var(--card) !important;
+        border-radius: 26px !important;
+        box-shadow: 0 14px 34px rgba(60, 42, 20, 0.06);
+    }
 
-            .photo-caption {
-                text-align: center;
-                font-size: 0.86rem;
-                color: var(--muted) !important;
-                margin-top: 10px;
-            }
+    .timeline-row {
+        max-width: 760px;
+        margin: 0 auto;
+        padding: 1rem 0;
+        border-bottom: 1px solid rgba(181, 138, 69, 0.18);
+    }
 
-            .timeline-list {
-                max-width: 760px;
-                margin: 0.5rem auto 0 auto;
-            }
+    .timeline-time {
+        font-family: Georgia, 'Times New Roman', serif;
+        color: var(--gold) !important;
+        font-size: 1.2rem;
+        font-weight: 700;
+        text-align: left;
+        white-space: nowrap;
+    }
 
-            .timeline-item {
-                display: grid;
-                grid-template-columns: 88px 1fr;
-                gap: 18px;
-                padding: 16px 0;
-                border-bottom: 1px solid rgba(181, 138, 69, 0.18);
-            }
+    .timeline-title {
+        font-weight: 800;
+        font-size: 1.03rem;
+        margin-bottom: 0.25rem;
+    }
 
-            .timeline-item:last-child { border-bottom: none; }
+    .timeline-text {
+        color: var(--muted) !important;
+        line-height: 1.6;
+    }
 
-            .timeline-time {
-                font-family: Georgia, 'Times New Roman', serif;
-                color: var(--gold) !important;
-                font-size: 1.16rem;
-                font-weight: 700;
-                text-align: left;
-            }
+    .swatch-name {
+        text-align: center !important;
+        font-weight: 800;
+        margin-top: 0.35rem;
+        font-size: 0.96rem;
+    }
 
-            .timeline-title {
-                font-weight: 780;
-                font-size: 1.02rem;
-                margin-bottom: 4px;
-            }
+    .swatch-code {
+        text-align: center !important;
+        color: var(--muted) !important;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        font-size: 0.82rem;
+        margin-bottom: 0.6rem;
+    }
 
-            .timeline-text {
-                color: #665746 !important;
-                line-height: 1.55;
-                font-size: 0.96rem;
-            }
+    .note-box {
+        background: rgba(217, 199, 174, 0.24);
+        border-left: 4px solid var(--gold);
+        border-radius: 16px;
+        padding: 15px 17px;
+        color: var(--muted) !important;
+        line-height: 1.65;
+        margin: 1.2rem auto 0;
+        max-width: 800px;
+    }
 
-            /* Smaller, elegant dress-code swatches. No st.image stretching on mobile. */
-            .swatch-grid {
-                display: grid;
-                grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
-                gap: 14px;
-                max-width: 820px;
-                margin: 0 auto 10px auto;
-            }
+    .story-text {
+        text-align: center !important;
+        color: var(--muted) !important;
+        line-height: 1.85;
+        font-size: 1.03rem;
+        max-width: 820px;
+        margin: 0.75rem auto;
+    }
 
-            .swatch-card {
-                background: rgba(255, 255, 255, 0.60);
-                border: 1px solid rgba(160, 126, 75, 0.16);
-                border-radius: 18px;
-                padding: 14px 8px 12px;
-                text-align: center;
-                min-height: 124px;
-                display: flex;
-                flex-direction: column;
-                align-items: center;
-                justify-content: center;
-            }
+    .story-placeholder {
+        background: rgba(255,255,255,0.55);
+        border: 1px dashed rgba(181, 138, 69, 0.45);
+        border-radius: 18px;
+        padding: 1.2rem 1rem;
+        color: var(--muted) !important;
+        text-align: center;
+        max-width: 820px;
+        margin: 1rem auto;
+        line-height: 1.7;
+    }
 
-            .swatch-circle {
-                width: 58px;
-                height: 58px;
-                border-radius: 999px;
-                border: 1px solid rgba(70, 58, 44, 0.24);
-                box-shadow: inset 0 0 0 1px rgba(255,255,255,0.45), 0 5px 12px rgba(0,0,0,0.05);
-                margin: 0 auto 9px auto;
-                flex: 0 0 auto;
-            }
+    .album-caption {
+        text-align: center !important;
+        color: var(--muted) !important;
+        font-size: 0.88rem;
+        margin-top: 0.35rem;
+    }
 
-            .color-name {
-                font-size: 0.86rem;
-                font-weight: 760;
-                margin-bottom: 2px;
-            }
+    .footer-text {
+        text-align: center !important;
+        color: #7b684f !important;
+        font-family: Georgia, 'Times New Roman', serif;
+        font-size: 1.25rem;
+        padding: 22px 8px 46px;
+        line-height: 1.75;
+    }
 
-            .color-code {
-                font-size: 0.76rem;
-                color: #6a5948 !important;
-                font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-            }
+    @media (max-width: 700px) {
+        .block-container {
+            padding-left: 0.8rem;
+            padding-right: 0.8rem;
+            padding-top: 0.75rem;
+        }
 
-            .note-box {
-                background: rgba(217, 199, 174, 0.23);
-                border-left: 4px solid var(--gold);
-                border-radius: 16px;
-                padding: 15px 17px;
-                color: #5a4a38 !important;
-                line-height: 1.65;
-                margin: 22px auto 0;
-                max-width: 790px;
-            }
+        .hero-card {
+            border-radius: 24px;
+            padding: 34px 18px 24px;
+        }
 
-            .story-text {
-                text-align: center;
-                max-width: 760px;
-                margin: 0.9rem auto;
-                color: #5a4a38 !important;
-                line-height: 1.75;
-                font-size: 1.02rem;
-            }
+        .hero-detail-grid {
+            grid-template-columns: 1fr;
+        }
 
-            .footer-text {
-                text-align: center;
-                color: #7b684f !important;
-                font-family: Georgia, 'Times New Roman', serif;
-                font-size: 1.25rem;
-                padding: 18px 8px 42px;
-                line-height: 1.75;
-            }
+        .section-heading {
+            font-size: 2.0rem;
+        }
 
-            .warning-soft {
-                background: rgba(255, 235, 205, 0.65);
-                border: 1px solid rgba(181, 138, 69, 0.22);
-                border-radius: 16px;
-                color: #654d2c !important;
-                padding: 12px 14px;
-                line-height: 1.55;
-                font-size: 0.92rem;
-            }
+        .subsection-heading {
+            font-size: 1.5rem;
+        }
 
-            @media (max-width: 700px) {
-                .block-container {
-                    padding-left: 0.9rem;
-                    padding-right: 0.9rem;
-                    padding-top: 0.75rem;
-                }
+        .timeline-row {
+            padding: 0.85rem 0;
+        }
 
-                .hero-card {
-                    border-radius: 24px;
-                    padding: 34px 18px 24px;
-                    margin-top: 4px;
-                }
+        .timeline-time {
+            font-size: 1.05rem;
+        }
 
-                .hero-detail-grid {
-                    grid-template-columns: 1fr;
-                }
-
-                div[data-testid="stVerticalBlockBorderWrapper"] {
-                    border-radius: 23px;
-                    padding: 0.55rem;
-                }
-
-                .section-heading {
-                    font-size: 1.55rem;
-                    color: #2a241e !important;
-                }
-
-                .subsection-heading {
-                    font-size: 1.22rem;
-                    color: #2a241e !important;
-                    margin-top: 1.2rem;
-                }
-
-                .center-copy {
-                    font-size: 0.95rem;
-                    color: #5a4a38 !important;
-                }
-
-                .timeline-item {
-                    grid-template-columns: 70px 1fr;
-                    gap: 12px;
-                    padding: 14px 0;
-                }
-
-                .timeline-time {
-                    font-size: 1.02rem;
-                }
-
-                .swatch-grid {
-                    grid-template-columns: repeat(2, minmax(0, 1fr));
-                    gap: 10px;
-                    max-width: 420px;
-                }
-
-                .swatch-card {
-                    min-height: 108px;
-                    padding: 12px 6px 10px;
-                    border-radius: 16px;
-                }
-
-                .swatch-circle {
-                    width: 46px;
-                    height: 46px;
-                    margin-bottom: 8px;
-                }
-
-                .color-name {
-                    font-size: 0.80rem;
-                    line-height: 1.2;
-                }
-
-                .color-code {
-                    font-size: 0.70rem;
-                }
-            }
-        </style>
-        """
-    ),
+        .center-text, .story-text {
+            font-size: 0.96rem;
+        }
+    }
+</style>
+""",
     unsafe_allow_html=True,
 )
 
-
 # ============================================================
-# 3. SIMPLE HTML HELPERS
+# 3. SMALL UI HELPERS
 # ============================================================
 
-def html_block(markup: str) -> None:
-    """Render small HTML snippets safely without Markdown code-block formatting."""
-    st.markdown(dedent(markup).strip(), unsafe_allow_html=True)
+def section_heading(text: str) -> None:
+    st.markdown(f'<h2 class="section-heading">{html.escape(text)}</h2>', unsafe_allow_html=True)
 
 
-def section_title(text: str) -> None:
-    html_block(f'<div class="section-heading">{html.escape(text)}</div>')
+def subsection_heading(text: str) -> None:
+    st.markdown(f'<h3 class="subsection-heading">{html.escape(text)}</h3>', unsafe_allow_html=True)
 
 
-def subsection_title(text: str) -> None:
-    html_block(f'<div class="subsection-heading">{html.escape(text)}</div>')
+def centered_text(text: str) -> None:
+    st.markdown(f'<p class="center-text">{html.escape(text)}</p>', unsafe_allow_html=True)
 
 
-def center_text(text: str) -> None:
-    html_block(f'<div class="center-copy">{html.escape(text)}</div>')
-
-
-def story_paragraph(text: str) -> None:
-    html_block(f'<div class="story-text">{html.escape(text)}</div>')
-
+def safe_markdown_text(text: str, class_name: str) -> None:
+    st.markdown(f'<div class="{class_name}">{html.escape(text)}</div>', unsafe_allow_html=True)
 
 # ============================================================
 # 4. IMAGE HELPERS
 # ============================================================
 
 def safe_open_image(path: Path) -> Optional[Image.Image]:
-    """Open an image safely and fix phone EXIF rotation."""
     try:
         with Image.open(path) as img:
             img = ImageOps.exif_transpose(img)
-            return img.convert("RGB").copy()
+            return img.copy()
     except (FileNotFoundError, UnidentifiedImageError, OSError, ValueError):
         return None
 
 
+def make_color_swatch(hex_code: str, size: int = 72) -> Image.Image:
+    """Create a small elegant circular color swatch as an image, not HTML."""
+    scale = 4
+    canvas_size = size * scale
+    margin = 6 * scale
+    img = Image.new("RGBA", (canvas_size, canvas_size), (255, 255, 255, 0))
+    draw = ImageDraw.Draw(img)
+
+    # Shadow
+    shadow_offset = 3 * scale
+    draw.ellipse(
+        (margin + shadow_offset, margin + shadow_offset, canvas_size - margin + shadow_offset, canvas_size - margin + shadow_offset),
+        fill=(60, 42, 20, 28),
+    )
+
+    # Circle
+    draw.ellipse(
+        (margin, margin, canvas_size - margin, canvas_size - margin),
+        fill=hex_code,
+        outline=(120, 105, 85, 120),
+        width=2 * scale,
+    )
+
+    # Inner highlight border
+    inset = 3 * scale
+    draw.ellipse(
+        (margin + inset, margin + inset, canvas_size - margin - inset, canvas_size - margin - inset),
+        outline=(255, 255, 255, 110),
+        width=1 * scale,
+    )
+
+    return img.resize((size, size), Image.Resampling.LANCZOS)
+
+
+def center_crop_to_portrait(img: Image.Image, ratio: Tuple[int, int] = (4, 5)) -> Image.Image:
+    src = img.copy().convert("RGB")
+    target_ratio = ratio[0] / ratio[1]
+    width, height = src.size
+    current_ratio = width / height
+
+    if current_ratio > target_ratio:
+        new_width = int(height * target_ratio)
+        left = (width - new_width) // 2
+        src = src.crop((left, 0, left + new_width, height))
+    elif current_ratio < target_ratio:
+        new_height = int(width / target_ratio)
+        top = max((height - new_height) // 2, 0)
+        src = src.crop((0, top, width, top + new_height))
+
+    src.thumbnail((900, 1125), Image.Resampling.LANCZOS)
+    return src
+
+
 def normalized_image_hash(img: Image.Image) -> str:
-    """Return a stable hash so exact duplicate images can be skipped."""
     small = img.copy().convert("RGB")
-    small.thumbnail((256, 256), Image.Resampling.LANCZOS)
+    small.thumbnail((180, 180), Image.Resampling.LANCZOS)
     buffer = io.BytesIO()
-    small.save(buffer, format="JPEG", quality=80)
+    small.save(buffer, format="JPEG", quality=75)
     return hashlib.sha256(buffer.getvalue()).hexdigest()
 
 
-def center_crop_to_portrait(img: Image.Image, output_size: Tuple[int, int] = (900, 1125)) -> Image.Image:
-    """Create a clean 4:5 portrait card image from any photo orientation."""
-    target_w, target_h = output_size
-    target_ratio = target_w / target_h
-
-    src = img.copy().convert("RGB")
-    w, h = src.size
-    src_ratio = w / h
-
-    if src_ratio > target_ratio:
-        new_w = int(h * target_ratio)
-        left = max((w - new_w) // 2, 0)
-        src = src.crop((left, 0, left + new_w, h))
-    else:
-        new_h = int(w / target_ratio)
-        top = max((h - new_h) // 2, 0)
-        src = src.crop((0, top, w, top + new_h))
-
-    return src.resize(output_size, Image.Resampling.LANCZOS)
-
-
 def is_album_candidate(path: Path) -> bool:
-    """Filter out non-album files and the main shrine photo."""
     if not path.is_file():
         return False
     if path.suffix.lower() not in SUPPORTED_IMAGE_EXTENSIONS:
         return False
-    if path.name.lower() in {"main_shrine.jpg", "main-shrine.jpg"}:
+    lower_name = path.name.lower()
+    if lower_name in {"main_shrine.jpg", "main_shrine.jpeg", "main_shrine.png"}:
         return False
-    if path.resolve() == MAIN_SHRINE_IMAGE.resolve():
+    if "secrets" in lower_name:
         return False
     return True
 
 
-def get_album_images() -> Tuple[List[Tuple[Path, Image.Image]], List[Path], int]:
-    """Return valid unique album images, invalid files, and duplicate count."""
-    candidates: List[Path] = []
-    seen_paths = set()
+@st.cache_data(show_spinner=False)
+def discover_album_paths() -> List[str]:
+    paths: List[Path] = []
+    seen = set()
 
     for folder in ALBUM_SEARCH_LOCATIONS:
         if not folder.exists():
             continue
-        for path in folder.iterdir():
-            if is_album_candidate(path) and path.resolve() not in seen_paths:
-                candidates.append(path)
-                seen_paths.add(path.resolve())
+        for path in sorted(folder.glob("*"), key=lambda p: p.name.lower()):
+            if not is_album_candidate(path):
+                continue
+            resolved = str(path.resolve())
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            paths.append(path)
 
-    candidates = sorted(candidates, key=lambda p: (str(p.parent).lower(), p.name.lower()))
+    return [str(p) for p in paths]
 
+
+def get_album_images() -> Tuple[List[Tuple[Path, Image.Image]], List[Path], int]:
     valid_images: List[Tuple[Path, Image.Image]] = []
     invalid_files: List[Path] = []
-    seen_hashes = set()
     duplicate_count = 0
+    seen_hashes = set()
 
-    for path in candidates:
+    for path_str in discover_album_paths():
+        path = Path(path_str)
+        if path.suffix.lower() in {".heic", ".heif"} and not HEIC_SUPPORTED:
+            invalid_files.append(path)
+            continue
+
         img = safe_open_image(path)
         if img is None:
             invalid_files.append(path)
@@ -586,59 +529,50 @@ def get_album_images() -> Tuple[List[Tuple[Path, Image.Image]], List[Path], int]
 
     return valid_images, invalid_files, duplicate_count
 
-
 # ============================================================
-# 5. GOOGLE SHEETS HELPERS
+# 5. GOOGLE SHEETS
 # ============================================================
 
-def read_secret(section: str, key: str, default: Optional[str] = None) -> Optional[str]:
-    """Safely read Streamlit secrets."""
+SHEETS_SCOPE = ["https://www.googleapis.com/auth/spreadsheets"]
+
+
+def get_secret_value(section: str, key: str, default: Optional[str] = None) -> Optional[str]:
     try:
-        value = st.secrets[section].get(key, default)
-        if value is None:
-            return default
-        return str(value)
+        section_obj = st.secrets.get(section, {})
+        return section_obj.get(key, default)
     except Exception:
         return default
 
 
-def normalize_private_key(private_key: str) -> str:
-    """Convert literal backslash-n sequences into real newlines if needed."""
-    if "\\n" in private_key:
-        return private_key.replace("\\n", "\n")
-    return private_key
-
-
 def google_sheets_config_status() -> Tuple[bool, str]:
-    """Return whether Google Sheets is configured and a clear status message."""
-    spreadsheet_url = read_secret("app", "spreadsheet_url", "") or ""
-    worksheet_name = read_secret("app", "worksheet_name", "RSVP") or "RSVP"
-    client_email = read_secret("google_service_account", "client_email", "") or ""
-    private_key = read_secret("google_service_account", "private_key", "") or ""
+    spreadsheet_url = get_secret_value("app", "spreadsheet_url")
+    worksheet_name = get_secret_value("app", "worksheet_name")
+    client_email = get_secret_value("google_service_account", "client_email")
+    private_key = get_secret_value("google_service_account", "private_key")
 
     if not spreadsheet_url or "PASTE_YOUR_GOOGLE_SHEET_URL_HERE" in spreadsheet_url:
-        return False, "Missing spreadsheet_url in Streamlit Secrets."
-    if "docs.google.com/spreadsheets" not in spreadsheet_url:
-        return False, "spreadsheet_url does not look like a Google Sheets URL."
+        return False, "Missing spreadsheet_url in Streamlit secrets."
     if not worksheet_name:
-        return False, "Missing worksheet_name in Streamlit Secrets."
+        return False, "Missing worksheet_name in Streamlit secrets."
     if not client_email:
-        return False, "Missing client_email in Streamlit Secrets."
+        return False, "Missing google_service_account.client_email in Streamlit secrets."
     if not private_key:
-        return False, "Missing private_key in Streamlit Secrets."
-    return True, "Google Sheets secrets are present."
+        return False, "Missing google_service_account.private_key in Streamlit secrets."
+    return True, "Google Sheets is configured."
 
 
 @st.cache_resource(show_spinner=False)
 def get_google_worksheet():
-    """Connect to the Google Sheet using Streamlit secrets."""
     import gspread
     from google.oauth2.service_account import Credentials
 
     spreadsheet_url = st.secrets["app"]["spreadsheet_url"]
     worksheet_name = st.secrets["app"].get("worksheet_name", "RSVP")
-    credentials_info: Dict[str, str] = dict(st.secrets["google_service_account"])
-    credentials_info["private_key"] = normalize_private_key(credentials_info["private_key"])
+    credentials_info = dict(st.secrets["google_service_account"])
+
+    # Handles both TOML formats: actual newlines and escaped \n.
+    if "private_key" in credentials_info and isinstance(credentials_info["private_key"], str):
+        credentials_info["private_key"] = credentials_info["private_key"].replace("\\n", "\n")
 
     credentials = Credentials.from_service_account_info(credentials_info, scopes=SHEETS_SCOPE)
     client = gspread.authorize(credentials)
@@ -653,21 +587,22 @@ def get_google_worksheet():
 
 
 def ensure_google_sheet_header(worksheet) -> None:
-    """Add the header row if the worksheet is empty."""
-    header = [
-        "Submitted At",
-        "Guest Name",
-        "Email",
-        "Adults Attending",
-        "Children Attending",
-        "Total Guests",
-        "Allergies",
-        "Message",
-        "Source",
-    ]
-    first_row = worksheet.row_values(1)
-    if not first_row:
-        worksheet.append_row(header, value_input_option="USER_ENTERED")
+    values = worksheet.get_all_values()
+    if not values:
+        worksheet.append_row(
+            [
+                "Submitted At",
+                "Guest Name",
+                "Email",
+                "Adults Attending",
+                "Children Attending",
+                "Total Guests",
+                "Allergies",
+                "Message",
+                "Source",
+            ],
+            value_input_option="USER_ENTERED",
+        )
 
 
 def save_to_google_sheet(
@@ -678,7 +613,6 @@ def save_to_google_sheet(
     allergies: str,
     message: str,
 ) -> None:
-    """Save RSVP data to Google Sheets."""
     worksheet = get_google_worksheet()
     ensure_google_sheet_header(worksheet)
     worksheet.append_row(
@@ -695,7 +629,6 @@ def save_to_google_sheet(
         ],
         value_input_option="USER_ENTERED",
     )
-
 
 # ============================================================
 # 6. VALIDATION
@@ -718,34 +651,30 @@ def validate_rsvp(guest_name: str, email: str, adults: int, children: int) -> Li
         errors.append("Please enter at least one adult or child attending.")
     return errors
 
-
 # ============================================================
-# 7. UI SECTIONS
+# 7. PAGE SECTIONS
 # ============================================================
 
 def render_hero() -> None:
-    html_block(
-        f"""
-        <section class="hero-card">
-            <div class="small-label">Together with our families</div>
-            <div class="hero-name">{html.escape(GROOM_NAME)}</div>
-            <div class="hero-amp">&amp;</div>
-            <div class="hero-name">{html.escape(BRIDE_NAME)}</div>
-            <div class="gold-line"></div>
-            <div class="center-copy">We joyfully invite you to celebrate our wedding.</div>
-            <div class="hero-detail-grid">
-                <div class="hero-detail">💍 <strong>{html.escape(WEDDING_DATE)}</strong></div>
-                <div class="hero-detail">📍 <strong>{html.escape(VENUE_NAME)}</strong><br>{html.escape(VENUE_SHORT)}</div>
-            </div>
-        </section>
-        """
+    st.markdown(
+        f'''<section class="hero-card">
+<div class="small-label">Together with our families</div>
+<h1 class="hero-name">{html.escape(GROOM_NAME)}<br><span class="hero-amp">&amp;</span><br>{html.escape(BRIDE_NAME)}</h1>
+<div class="gold-line"></div>
+<p class="center-text">We joyfully invite you to celebrate our wedding.</p>
+<div class="hero-detail-grid">
+<div class="hero-detail">💍 <strong>{html.escape(WEDDING_DATE)}</strong></div>
+<div class="hero-detail">📍 <strong>{html.escape(VENUE_NAME)}</strong><br>{html.escape(VENUE_SHORT)}</div>
+</div>
+</section>''',
+        unsafe_allow_html=True,
     )
 
 
 def render_invitation_details() -> None:
     with st.container(border=True):
-        section_title("Invitation Details")
-        center_text(
+        section_heading("Invitation Details")
+        centered_text(
             f"Please join us for a Buddhist wedding ceremony at {VENUE_NAME}. "
             "The celebration will include a prayer service, transfer of merits, photo session, and vegetarian banquet."
         )
@@ -753,129 +682,116 @@ def render_invitation_details() -> None:
 
 def render_main_shrine() -> None:
     with st.container(border=True):
-        section_title("The Main Shrine")
-        center_text(
+        section_heading("The Main Shrine")
+        centered_text(
             "The main shrine has a warm gold, wood, and lantern atmosphere. "
             "The invitation color palette is inspired by this peaceful temple setting."
         )
         shrine_img = safe_open_image(MAIN_SHRINE_IMAGE)
         if shrine_img is None:
-            st.warning("Add the main shrine photo as: assets/main_shrine.jpg")
+            st.warning("Add the main shrine photo as assets/main_shrine.jpg.")
         else:
-            st.image(shrine_img, use_container_width=True)
-            html_block('<div class="photo-caption">Fo Guang Shan Temple Main Shrine</div>')
+            st.image(shrine_img, width="stretch")
+            safe_markdown_text("Fo Guang Shan Temple Main Shrine", "album-caption")
 
 
 def render_timeline() -> None:
-    items = []
-    for time_text, title, description in TIMELINE:
-        items.append(
-            f"""
-            <div class="timeline-item">
-                <div class="timeline-time">{html.escape(time_text)}</div>
-                <div>
-                    <div class="timeline-title">{html.escape(title)}</div>
-                    <div class="timeline-text">{html.escape(description)}</div>
-                </div>
-            </div>
-            """
-        )
-
     with st.container(border=True):
-        section_title("Wedding Timeline")
-        center_text("A peaceful temple ceremony followed by photos and a vegetarian banquet.")
-        html_block(f'<div class="timeline-list">{"".join(items)}</div>')
+        section_heading("Wedding Timeline")
+        centered_text("A peaceful temple ceremony followed by photos and a vegetarian banquet.")
+
+        for time_text, title, description in TIMELINE:
+            st.markdown('<div class="timeline-row">', unsafe_allow_html=True)
+            time_col, text_col = st.columns([1, 4], vertical_alignment="top")
+            with time_col:
+                safe_markdown_text(time_text, "timeline-time")
+            with text_col:
+                safe_markdown_text(title, "timeline-title")
+                safe_markdown_text(description, "timeline-text")
+            st.markdown('</div>', unsafe_allow_html=True)
 
 
-def render_color_group(title: str, colors: List[Tuple[str, str]]) -> None:
-    cards = []
-    for color_name, hex_code in colors:
-        safe_name = html.escape(color_name)
-        safe_hex = html.escape(hex_code)
-        border = "border: 1px solid rgba(70, 58, 44, 0.42);" if hex_code.upper() == "#FFFFFF" else ""
-        cards.append(
-            f"""
-            <div class="swatch-card">
-                <div class="swatch-circle" style="background-color: {safe_hex}; {border}"></div>
-                <div class="color-name">{safe_name}</div>
-                <div class="color-code">{safe_hex}</div>
-            </div>
-            """
-        )
+def render_color_palette(title: str, colors: List[Tuple[str, str]]) -> None:
+    subsection_heading(title)
 
-    subsection_title(title)
-    html_block(f'<div class="swatch-grid">{"".join(cards)}</div>')
+    # Streamlit-native cards. No generated HTML blocks, so no raw code can leak onto the page.
+    per_row = 5 if len(colors) >= 5 else len(colors)
+    for start in range(0, len(colors), per_row):
+        row_colors = colors[start : start + per_row]
+        cols = st.columns(len(row_colors), gap="medium", vertical_alignment="center")
+        for col, (name, hex_code) in zip(cols, row_colors):
+            with col:
+                with st.container(border=True):
+                    left, mid, right = st.columns([1, 1, 1])
+                    with mid:
+                        st.image(make_color_swatch(hex_code, size=62), width=62)
+                    safe_markdown_text(name, "swatch-name")
+                    safe_markdown_text(hex_code, "swatch-code")
 
 
 def render_dress_code() -> None:
     with st.container(border=True):
-        section_title("Dress Code")
-        center_text(
+        section_heading("Dress Code")
+        centered_text(
             "Please choose soft, elegant colors that match the warm temple setting. "
             "Ivory and white are not included for guests so the bride's white dress remains visually distinct."
         )
-        render_color_group("Ladies", LADIES_COLORS)
-        render_color_group("Men", MEN_COLORS)
-        render_color_group("Groom Reference", GROOM_REFERENCE)
-        html_block(
-            """
-            <div class="note-box">
-                <strong>Suggested guest style:</strong>
-                Ladies may wear sand beige, warm taupe, pastel pink, muted dusty blue, or soft charcoal.
-                Men may wear medium grey, deep navy, muted blue, or charcoal suits with a white shirt.
-                The groom will wear a black suit, white shirt, and black tie. For the temple ceremony,
-                modest and respectful outfits are recommended.
-            </div>
-            """
+
+        render_color_palette("Ladies", LADIES_COLORS)
+        render_color_palette("Men", MEN_COLORS)
+        render_color_palette("Groom Reference", GROOM_REFERENCE)
+
+        st.markdown(
+            '''<div class="note-box"><strong>Suggested guest style:</strong> Ladies may wear sand beige, warm taupe, pastel pink, muted dusty blue, or soft charcoal. Men may wear medium grey, deep navy, muted blue, or charcoal suits with a white shirt. The groom will wear a black suit, white shirt, and black tie. For the temple ceremony, modest and respectful outfits are recommended.</div>''',
+            unsafe_allow_html=True,
         )
 
 
 def render_our_story() -> None:
     with st.container(border=True):
-        section_title("Our Story of Love")
-        center_text("A small space for us to share our journey before the wedding day.")
-        for paragraph in OUR_STORY_PARAGRAPHS:
-            story_paragraph(paragraph)
-        st.info("Edit OUR_STORY_PARAGRAPHS near the top of app.py to replace this placeholder text with your real story.")
+        section_heading("Our Story of Love")
+        st.markdown(
+            '''<p class="story-text">This section is reserved for our love story. You can replace this placeholder with a few paragraphs about how you met, meaningful memories, your journey together, and what this wedding day means to both of you.</p>
+<div class="story-placeholder">Write your story here later.<br>Example: how we met, our first memories, our proposal, our shared values, and why we chose Fo Guang Shan Temple for this special day.</div>''',
+            unsafe_allow_html=True,
+        )
 
 
 def render_album() -> None:
     with st.container(border=True):
-        section_title("Our Album")
-        center_text("A few memories we would love to share with you.")
+        section_heading("Our Album")
+        centered_text("A few memories we would love to share with you.")
+
         valid_images, invalid_files, duplicate_count = get_album_images()
-
         if not valid_images:
-            st.warning("No valid album photos found. Add JPG, PNG, or WEBP photos into assets/album/.")
+            st.warning("No valid album photos found. Add JPG, PNG, WEBP, or converted HEIC photos into assets/album/.")
         else:
-            for i in range(0, len(valid_images), 2):
-                cols = st.columns(2)
-                for j, col in enumerate(cols):
-                    image_index = i + j
-                    if image_index >= len(valid_images):
+            # Use two columns on desktop. Streamlit will stack cleanly on narrow screens.
+            for index in range(0, len(valid_images), 2):
+                cols = st.columns(2, gap="medium")
+                for offset, col in enumerate(cols):
+                    photo_index = index + offset
+                    if photo_index >= len(valid_images):
                         continue
-                    _, img = valid_images[image_index]
-                    portrait_img = center_crop_to_portrait(img)
+                    path, img = valid_images[photo_index]
                     with col:
-                        st.image(portrait_img, use_container_width=True)
+                        portrait_img = center_crop_to_portrait(img)
+                        st.image(portrait_img, width="stretch")
 
-        notes = []
         if invalid_files:
-            invalid_names = ", ".join(p.name for p in invalid_files[:5])
-            extra = "" if len(invalid_files) <= 5 else f" and {len(invalid_files) - 5} more"
-            notes.append(f"Skipped invalid image file(s): {invalid_names}{extra}. Re-export or delete these files.")
+            names = ", ".join(p.name for p in invalid_files[:6])
+            extra = "" if len(invalid_files) <= 6 else f" and {len(invalid_files) - 6} more"
+            st.info(f"Skipped invalid or unsupported image file(s): {names}{extra}.")
         if duplicate_count:
-            notes.append(f"Skipped {duplicate_count} duplicate image file(s) to avoid repeated photos.")
-        if notes:
-            html_block(f'<div class="warning-soft">{"<br>".join(html.escape(note) for note in notes)}</div>')
+            st.info(f"Skipped {duplicate_count} duplicate image file(s) to avoid repeated photos.")
+        if not HEIC_SUPPORTED:
+            st.caption("HEIC note: HEIC files require pillow-heif in requirements.txt, or convert them to JPG first.")
 
 
 def render_rsvp_form() -> None:
     with st.container(border=True):
-        section_title("RSVP")
-        center_text(
-            "Please let us know who will attend and whether there are any allergies for the vegetarian banquet."
-        )
+        section_heading("RSVP")
+        centered_text("Please let us know who will attend and whether there are any allergies for the vegetarian banquet.")
 
         configured, status_message = google_sheets_config_status()
         if not configured:
@@ -890,31 +806,15 @@ def render_rsvp_form() -> None:
 
             col1, col2 = st.columns(2)
             with col1:
-                adults = st.number_input(
-                    "Number of adults attending *",
-                    min_value=0,
-                    max_value=20,
-                    value=1,
-                    step=1,
-                )
+                adults = st.number_input("Number of adults attending *", min_value=0, max_value=20, value=1, step=1)
             with col2:
-                children = st.number_input(
-                    "Number of children attending",
-                    min_value=0,
-                    max_value=20,
-                    value=0,
-                    step=1,
-                )
+                children = st.number_input("Number of children attending", min_value=0, max_value=20, value=0, step=1)
 
             allergies = st.text_area(
                 "Any allergies or dietary notes for the vegetarian banquet?",
                 placeholder="Example: peanut allergy, gluten-free request, no mushrooms, etc.",
             )
-            message = st.text_area(
-                "Optional message to the couple",
-                placeholder="Write a short blessing or message...",
-            )
-
+            message = st.text_area("Optional message to the couple", placeholder="Write a short blessing or message...")
             submitted = st.form_submit_button("Submit RSVP", use_container_width=True)
 
         if submitted:
@@ -922,40 +822,37 @@ def render_rsvp_form() -> None:
             if errors:
                 for error in errors:
                     st.error(error)
-            elif not configured:
-                st.error(
-                    "The RSVP was not saved because Google Sheets is not configured. "
-                    f"Fix this first: {status_message}"
+                return
+
+            configured, status_message = google_sheets_config_status()
+            if not configured:
+                st.error(f"The RSVP was not saved because Google Sheets is not configured. Fix this first: {status_message}")
+                return
+
+            try:
+                save_to_google_sheet(
+                    guest_name=guest_name,
+                    email=email,
+                    adults=int(adults),
+                    children=int(children),
+                    allergies=allergies,
+                    message=message,
                 )
-            else:
-                try:
-                    save_to_google_sheet(
-                        guest_name=guest_name,
-                        email=email,
-                        adults=int(adults),
-                        children=int(children),
-                        allergies=allergies,
-                        message=message,
-                    )
-                    st.success("Thank you! Your RSVP has been recorded in the Google Sheet.")
-                except Exception as exc:
-                    st.error(
-                        "The RSVP could not be saved to Google Sheets. Check the Sheet URL, worksheet tab name, "
-                        "Google Sheets API, service-account key, and sharing permission."
-                    )
-                    st.exception(exc)
+                st.success("Thank you! Your RSVP has been recorded in the Google Sheet. We look forward to celebrating with you.")
+            except Exception as exc:
+                st.error(
+                    "The RSVP could not be saved to Google Sheets. Check the Sheet URL, worksheet tab name, "
+                    "Google Sheets API, service-account key, and sharing permission."
+                )
+                # Safe debug detail. It does not print the private key.
+                st.exception(exc)
 
 
 def render_footer() -> None:
-    html_block(
-        """
-        <div class="footer-text">
-            With gratitude, we look forward to celebrating this special day with you.<br>
-            感恩有您 · 見證幸福
-        </div>
-        """
+    st.markdown(
+        '''<div class="footer-text">With gratitude, we look forward to celebrating this special day with you.<br>感恩有您 · 見證幸福</div>''',
+        unsafe_allow_html=True,
     )
-
 
 # ============================================================
 # 8. MAIN APP
