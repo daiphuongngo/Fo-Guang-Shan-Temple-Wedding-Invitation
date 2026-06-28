@@ -39,19 +39,25 @@ BRIDE_NAME = "Alice Bui"
 WEDDING_DATE = "Saturday, September 26, 2026"
 VENUE_NAME = "Fo Guang Shan Temple Main Shrine"
 VENUE_SHORT = "Fo Guang Shan Temple, Toronto"
+VENUE_MAP_URL = "https://maps.app.goo.gl/tDkjwbnmX9QtFNEu7"
 
 TIMELINE: List[Tuple[str, str, str]] = [
-    ("16:00", "Gatherings", "Guests arrive, settle in, and prepare for the ceremony."),
-    ("16:30", "Praying Services & Transfer of Merits", "A one-hour Buddhist prayer service and transfer of merits."),
-    ("17:30", "Photo Shooting", "Family, friends, and couple photos."),
-    ("18:00", "Vegetarian Banquet", "A vegetarian banquet to celebrate together."),
+    ("10:00", "Gatherings", "Guests arrive, settle in, and prepare for the ceremony."),
+    ("11:00", "Praying Services & Transfer of Merits", "A one-hour Buddhist prayer service and transfer of merits."),
+    ("12:00", "Photo Shooting", "Family, friends, and couple photos."),
+    ("12:30", "Vegetarian Banquet", "A vegetarian banquet to celebrate together."),
 ]
 
 LADIES_COLORS: List[Tuple[str, str]] = [
     ("Sand Beige", "#D9C7AE"),
     ("Warm Taupe", "#A69B8E"),
     ("Pastel Pink", "#EBC7C7"),
+    ("Dusty Rose", "#CFA7A0"),
+    ("Blush Mauve", "#B58F9A"),
+    ("Soft Sage", "#A8B39B"),
+    ("Champagne Beige", "#CDBB9A"),
     ("Muted Dusty Blue", "#4D6A87"),
+    ("Slate Blue", "#5F7488"),
     ("Soft Charcoal", "#262626"),
 ]
 
@@ -296,6 +302,35 @@ st.markdown(
         line-height: 1.65;
         margin: 1.2rem auto 0;
         max-width: 800px;
+    }
+
+    .map-card {
+        background: rgba(255, 255, 255, 0.56);
+        border: 1px solid rgba(181, 138, 69, 0.22);
+        border-radius: 18px;
+        padding: 1rem;
+        text-align: center !important;
+        max-width: 760px;
+        margin: 1rem auto 0 auto;
+        line-height: 1.65;
+    }
+
+    .map-link {
+        display: inline-block;
+        margin-top: 0.55rem;
+        padding: 0.72rem 1.15rem;
+        border-radius: 999px;
+        background: #b58a45;
+        color: #fff !important;
+        text-decoration: none !important;
+        font-weight: 800;
+        box-shadow: 0 8px 20px rgba(60, 42, 20, 0.12);
+    }
+
+    .map-link:hover {
+        background: #9d763b;
+        color: #fff !important;
+        text-decoration: none !important;
     }
 
     .story-text {
@@ -695,6 +730,20 @@ def render_main_shrine() -> None:
             safe_markdown_text("Fo Guang Shan Temple Main Shrine", "album-caption")
 
 
+def render_map_section() -> None:
+    with st.container(border=True):
+        section_heading("Map & Directions")
+        centered_text("Please use the map link below for directions to Fo Guang Shan Temple Main Shrine.")
+        map_html = (
+            '<div class="map-card">'
+            '<strong>Fo Guang Shan Temple Main Shrine</strong><br>'
+            f'{html.escape(VENUE_SHORT)}<br>'
+            f'<a class="map-link" href="{html.escape(VENUE_MAP_URL)}" target="_blank" rel="noopener noreferrer">Open Google Maps</a>'
+            '</div>'
+        )
+        st.markdown(map_html, unsafe_allow_html=True)
+
+
 def render_timeline() -> None:
     with st.container(border=True):
         section_heading("Wedding Timeline")
@@ -734,7 +783,8 @@ def render_dress_code() -> None:
         section_heading("Dress Code")
         centered_text(
             "Please choose soft, elegant colors that match the warm temple setting. "
-            "Ivory and white are not included for guests so the bride's white dress remains visually distinct."
+            "Ivory and white are not included for guests so the bride's white dress remains visually distinct. "
+            "The suggested palette gives ladies more choices while keeping the overall photos harmonious."
         )
 
         render_color_palette("Ladies", LADIES_COLORS)
@@ -742,17 +792,7 @@ def render_dress_code() -> None:
         render_color_palette("Groom Reference", GROOM_REFERENCE)
 
         st.markdown(
-            '''<div class="note-box"><strong>Suggested guest style:</strong> Ladies may wear sand beige, warm taupe, pastel pink, muted dusty blue, or soft charcoal. Men may wear medium grey, deep navy, muted blue, or charcoal suits with a white shirt. The groom will wear a black suit, white shirt, and black tie. For the temple ceremony, modest and respectful outfits are recommended.</div>''',
-            unsafe_allow_html=True,
-        )
-
-
-def render_our_story() -> None:
-    with st.container(border=True):
-        section_heading("Our Story of Love")
-        st.markdown(
-            '''<p class="story-text">This section is reserved for our love story. You can replace this placeholder with a few paragraphs about how you met, meaningful memories, your journey together, and what this wedding day means to both of you.</p>
-<div class="story-placeholder">Write your story here later.<br>Example: how we met, our first memories, our proposal, our shared values, and why we chose Fo Guang Shan Temple for this special day.</div>''',
+            '''<div class="note-box"><strong>Suggested guest style:</strong> Ladies may wear sand beige, warm taupe, pastel pink, dusty rose, blush mauve, soft sage, champagne beige, muted dusty blue, slate blue, or soft charcoal. Men may wear medium grey, deep navy, muted blue, or charcoal suits with a white shirt. The groom will wear a black suit, white shirt, and black tie.<br><br><strong>Temple respect note:</strong> Because the wedding takes place in a solemn Buddhist pagoda setting, please choose respectful outfits that uphold respect and solemnity for the Buddha, Bodhisattvas, the Dharma, and the Sangha/Venerables. This means choosing attire that feels graceful, calm, and appropriate for a sacred ceremony.</div>''',
             unsafe_allow_html=True,
         )
 
@@ -862,9 +902,9 @@ def main() -> None:
     render_hero()
     render_invitation_details()
     render_main_shrine()
+    render_map_section()
     render_timeline()
     render_dress_code()
-    render_our_story()
     render_album()
     render_rsvp_form()
     render_footer()
