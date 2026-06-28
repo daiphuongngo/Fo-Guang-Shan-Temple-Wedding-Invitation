@@ -696,7 +696,7 @@ def render_hero() -> None:
 <div class="small-label">Together with our families</div>
 <h1 class="hero-name">{html.escape(GROOM_NAME)}<br><span class="hero-amp">&amp;</span><br>{html.escape(BRIDE_NAME)}</h1>
 <div class="gold-line"></div>
-<p class="center-text">We joyfully invite you to celebrate our wedding.</p>
+<p class="center-text">We joyfully invite you to celebrate our Everlasting Union Buddhist Wedding Ceremony.</p>
 <div class="hero-detail-grid">
 <div class="hero-detail">💍 <strong>{html.escape(WEDDING_DATE)}</strong></div>
 <div class="hero-detail">📍 <strong>{html.escape(VENUE_NAME)}</strong><br>{html.escape(VENUE_SHORT)}</div>
