@@ -831,7 +831,7 @@ def render_album() -> None:
 def render_rsvp_form() -> None:
     with st.container(border=True):
         section_heading("RSVP")
-        centered_text("Please let us know who will attend and whether there are any allergies for the vegetarian banquet.")
+        centered_text("Please let us know who will attend and whether there are any allergies for the vegetarian banquet before August 1st, 2026.")
 
         configured, status_message = google_sheets_config_status()
         if not configured:
