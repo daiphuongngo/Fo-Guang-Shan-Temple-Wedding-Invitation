@@ -79,7 +79,7 @@ SUPPORTED_IMAGE_EXTENSIONS = {
 }
 
 # If you want the app to display only photos from assets/album, change this to [ALBUM_DIR].
-ALBUM_SEARCH_LOCATIONS = [ALBUM_DIR, ASSETS_DIR, BASE_DIR]
+ALBUM_SEARCH_LOCATIONS = [ALBUM_DIR]
 
 # ============================================================
 # 2. CSS: MOBILE + DESKTOP
