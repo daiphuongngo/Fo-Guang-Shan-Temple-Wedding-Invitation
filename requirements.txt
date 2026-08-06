@@ -1,5 +1,5 @@
-streamlit>=1.36.0
-Pillow>=10.0.0
-gspread>=6.0.0
-google-auth>=2.29.0
-pillow-heif
+streamlit==1.60.0
+Pillow==12.2.0
+gspread==6.2.1
+google-auth==2.55.1
+pillow-heif==1.4.0
